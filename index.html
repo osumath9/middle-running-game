@@ -1,0 +1,811 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>중간 달리기 게임</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- KaTeX for Math Rendering -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/katex.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/katex@0.16.8/dist/contrib/auto-render.min.js"></script>
+
+    <!-- FontAwesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <style>
+        body { font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; background-color: #f3f4f6; }
+        .card { background: white; border-radius: 16px; box-shadow: 0 4px 12px rgba(0,0,0,0.08); }
+        .hidden-safely { display: none !important; }
+        .badge-highest { background-color: #1E3A8A; color: white; } /* 짙은 파랑 */
+        .badge-median { background-color: #0D9488; color: white; } /* 에메랄드 */
+        .badge-lowest { background-color: #C2410C; color: white; } /* 주황/브라운 */
+        .badge-default { background-color: #E5E7EB; color: #374151; }
+    </style>
+</head>
+<body class="min-h-screen text-gray-800">
+
+    <div id="app" class="max-w-5xl mx-auto p-4 pb-20">
+        <!-- 동적 렌더링 영역 -->
+        <div class="flex justify-center items-center h-64">
+            <div class="text-2xl text-gray-500 font-bold"><i class="fas fa-spinner fa-spin mr-2"></i> 시스템 불러오는 중...</div>
+        </div>
+    </div>
+
+    <!-- Firebase SDK -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, onSnapshot, updateDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // 파이어베이스 설정
+        const firebaseConfig = {
+            apiKey: "AIzaSyDZX82M_FQETvnNp1IdxSCwYQaNvaWbNX8",
+            authDomain: "middle-running-game.firebaseapp.com",
+            projectId: "middle-running-game",
+            storageBucket: "middle-running-game.firebasestorage.app",
+            messagingSenderId: "499067776363",
+            appId: "1:499067776363:web:e4efe594d09fb3baec302e"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const auth = getAuth(app);
+        const db = getFirestore(app);
+
+        // 단일 세션용 방 참조
+        const gameDocRef = doc(db, "games", "main_room");
+
+        let appState = null;
+        let myRole = null; // 'student' | 'teacher'
+        let myGroup = null; // '1', '2', ...
+        
+        // 돈 관리 모달 상태 보존
+        let isMoneyModalOpen = false;
+        let visibleBalances = {}; // { '1': true/false }
+
+        const INITIAL_MONEY = 1000; // 1000만원
+        const TOTAL_ROUNDS = 10;
+        const ADMIN_PASSWORD = "13579";
+
+        const appContainer = document.getElementById('app');
+
+        // 앱 초기화 및 구독 설정
+        async function initApp() {
+            let isLoaded = false;
+            
+            const timeoutId = setTimeout(() => {
+                if (!isLoaded && (!appState || !appState.state)) {
+                    renderFirebaseErrorScreen();
+                }
+            }, 4500);
+
+            try {
+                try {
+                    await signInAnonymously(auth);
+                } catch(authErr) {
+                    console.warn("익명 로그인 진행 경고:", authErr);
+                }
+                
+                onSnapshot(gameDocRef, (docSnap) => {
+                    isLoaded = true;
+                    clearTimeout(timeoutId);
+                    if (docSnap.exists()) {
+                        appState = docSnap.data();
+                    } else {
+                        appState = { state: 'setup' }; 
+                    }
+                    render();
+                }, (error) => {
+                    isLoaded = true;
+                    clearTimeout(timeoutId);
+                    console.error("Firestore 읽기 오류:", error);
+                    renderFirebaseErrorScreen(error);
+                });
+            } catch (error) {
+                isLoaded = true;
+                clearTimeout(timeoutId);
+                console.error("초기화 에러:", error);
+                renderFirebaseErrorScreen(error);
+            }
+        }
+
+        // 파이어베이스 연결 실패 시 에러 안내 화면
+        function renderFirebaseErrorScreen(error = null) {
+            appContainer.innerHTML = `
+                <div class="card p-8 max-w-2xl mx-auto mt-10 bg-white border border-red-200 shadow-xl">
+                    <div class="text-center text-red-500 mb-4">
+                        <i class="fas fa-exclamation-circle text-5xl"></i>
+                    </div>
+                    <h2 class="text-2xl font-bold text-center text-gray-900 mb-2">파이어베이스 연결 실패</h2>
+                    <p class="text-center text-gray-600 mb-6">GitHub Pages 도메인 승인 및 Firebase 설정 확인이 필요합니다.</p>
+
+                    <div class="bg-amber-50 border border-amber-200 rounded-xl p-4 mb-6 text-sm text-amber-900 space-y-2">
+                        <div class="font-bold text-base border-b border-amber-200 pb-1 mb-2">🛠️ 해결 방법 (Firebase 콘솔):</div>
+                        <p><strong>1. 승인된 도메인 추가:</strong> Firebase Console &gt; Authentication &gt; 설정 &gt; <strong>승인된 도메인</strong>에 <code>github.io</code> 등록</p>
+                        <p><strong>2. 익명 로그인 활성화:</strong> Authentication &gt; Sign-in method &gt; <strong>익명(Anonymous)</strong> 로그인 사용 설정</p>
+                        <p><strong>3. Firestore 보안 규칙:</strong> Firestore Database &gt; 규칙(Rules) 탭에서 읽기/쓰기 허용 확인</p>
+                    </div>
+
+                    <div class="flex flex-col sm:flex-row gap-3">
+                        <button onclick="location.reload()" class="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3 px-4 rounded-xl transition">
+                            <i class="fas fa-sync-alt mr-2"></i> 다시 시도하기
+                        </button>
+                        <button id="btn-fallback-local" class="flex-1 bg-gray-800 hover:bg-gray-900 text-white font-bold py-3 px-4 rounded-xl transition">
+                            <i class="fas fa-laptop mr-2"></i> 오프라인 모드로 일단 실행
+                        </button>
+                    </div>
+                </div>
+            `;
+
+            document.getElementById('btn-fallback-local').onclick = () => {
+                appState = { state: 'setup' };
+                render();
+            };
+        }
+
+        // KaTeX 수식 렌더링
+        function renderMath() {
+            renderMathInElement(appContainer, {
+                delimiters: [
+                    {left: '$$', right: '$$', display: true},
+                    {left: '\\[', right: '\\]', display: true},
+                    {left: '$', right: '$', display: false},
+                    {left: '\\(', right: '\\)', display: false}
+                ],
+                throwOnError: false
+            });
+        }
+
+        // 메인 라우터
+        function render() {
+            if (!myRole) {
+                renderLoginScreen();
+            } else if (myRole === 'teacher') {
+                renderTeacherScreen();
+            } else if (myRole === 'student') {
+                renderStudentScreen();
+            }
+            renderMath();
+        }
+
+        /* -------------------------------------------------------------------------- */
+        /* 1. 로그인 / 설정 화면                                                       */
+        /* -------------------------------------------------------------------------- */
+        function renderLoginScreen() {
+            const numGroups = appState && appState.numGroups ? appState.numGroups : 7;
+            let options = '';
+            for(let i=1; i<=numGroups; i++) {
+                options += `<option value="${i}">${i}모둠</option>`;
+            }
+
+            appContainer.innerHTML = `
+                <div class="relative max-w-lg mx-auto mt-16 px-2">
+                    <button id="btn-admin-login" class="absolute top-3 right-5 text-gray-400 hover:text-gray-700 p-2 text-xl">
+                        <i class="fas fa-cog"></i>
+                    </button>
+                    
+                    <div class="card p-8 md:p-10 text-center border border-gray-100 shadow-xl">
+                        <div class="text-5xl mb-3">🏃‍♂️🏃‍♀️</div>
+                        <h1 class="text-3xl font-extrabold mb-8 text-indigo-900 tracking-tight">중간 달리기 게임</h1>
+                        
+                        <div class="mb-8 text-left">
+                            <label class="block text-gray-700 font-bold mb-2 text-lg">우리 모둠 선택</label>
+                            <select id="group-select" class="w-full p-4 border-2 border-gray-300 rounded-xl bg-gray-50 text-2xl text-center font-bold text-gray-800 focus:outline-none focus:border-indigo-500">
+                                ${options}
+                            </select>
+                        </div>
+                        
+                        <button id="btn-student-join" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold py-5 rounded-xl text-2xl shadow-lg transition transform hover:scale-[1.02] active:scale-95">
+                            게임 입장하기
+                        </button>
+                    </div>
+                </div>
+            `;
+
+            document.getElementById('btn-student-join').onclick = () => {
+                const sel = document.getElementById('group-select');
+                myGroup = sel.value;
+                myRole = 'student';
+                render();
+            };
+
+            document.getElementById('btn-admin-login').onclick = () => {
+                const pw = prompt("교사용 비밀번호를 입력하세요.");
+                if (pw === ADMIN_PASSWORD) {
+                    myRole = 'teacher';
+                    render();
+                } else if (pw !== null) {
+                    alert("비밀번호가 일치하지 않습니다.");
+                }
+            };
+        }
+
+        /* -------------------------------------------------------------------------- */
+        /* 2. 교사용 화면                                                             */
+        /* -------------------------------------------------------------------------- */
+        function renderTeacherScreen() {
+            if (!appState || appState.state === 'setup') {
+                renderTeacherSetup();
+            } else {
+                renderTeacherDashboard();
+            }
+        }
+
+        function renderTeacherSetup() {
+            appContainer.innerHTML = `
+                <div class="max-w-3xl mx-auto mt-12 card p-8 border border-gray-200 shadow-xl">
+                    <div class="flex justify-between items-center mb-6 border-b pb-4">
+                        <div>
+                            <span class="bg-indigo-100 text-indigo-800 px-3 py-1 rounded-full text-sm font-bold">교사 전용</span>
+                            <h2 class="text-3xl font-extrabold text-gray-900 mt-1"><i class="fas fa-chalkboard-teacher mr-2 text-indigo-600"></i>게임 시작 세팅</h2>
+                        </div>
+                        <button id="btn-logout" class="text-gray-500 hover:text-red-500 text-sm font-bold bg-gray-100 px-3 py-2 rounded-lg">로그아웃</button>
+                    </div>
+                    
+                    <p class="mb-8 text-gray-600 font-medium text-lg">참여하는 모둠 수를 선택하여 게임을 시작하세요. 시작 시 모든 모둠에 초기 자금 1000만원이 지급됩니다.</p>
+                    
+                    <div class="grid grid-cols-2 gap-6">
+                        <button id="btn-start-6" class="bg-indigo-50 hover:bg-indigo-100 text-indigo-900 font-extrabold py-12 rounded-2xl text-3xl transition border-2 border-indigo-300 shadow-md">
+                            6모둠으로 시작
+                        </button>
+                        <button id="btn-start-7" class="bg-teal-50 hover:bg-teal-100 text-teal-900 font-extrabold py-12 rounded-2xl text-3xl transition border-2 border-teal-300 shadow-md">
+                            7모둠으로 시작
+                        </button>
+                    </div>
+                </div>
+            `;
+
+            document.getElementById('btn-logout').onclick = () => { myRole = null; render(); };
+            document.getElementById('btn-start-6').onclick = () => startGame(6);
+            document.getElementById('btn-start-7').onclick = () => startGame(7);
+        }
+
+        async function startGame(num) {
+            const groups = {};
+            for(let i=1; i<=num; i++) {
+                groups[i] = {
+                    balance: INITIAL_MONEY,
+                    currentBid: null,
+                    status: 'pending'
+                };
+            }
+            await setDoc(gameDocRef, {
+                state: 'waiting_round_start',
+                round: 1,
+                numGroups: num,
+                groups: groups,
+                results: []
+            });
+        }
+
+        function renderTeacherDashboard() {
+            const { round, groups, state, numGroups } = appState;
+            
+            let groupStatusHTML = '';
+            let allSubmitted = true;
+
+            for(let i=1; i<=numGroups; i++) {
+                const g = groups[i];
+                const isSub = g.status === 'submitted';
+                if (!isSub) allSubmitted = false;
+                
+                groupStatusHTML += `
+                    <div class="p-5 rounded-xl border-2 ${isSub ? 'border-green-500 bg-green-50' : 'border-gray-200 bg-white'} flex flex-col justify-between items-center shadow-sm relative">
+                        <div class="w-full flex justify-between items-center mb-2">
+                            <span class="font-extrabold text-2xl">${i}모둠</span>
+                            <span class="font-bold text-lg ${isSub ? 'text-green-600' : 'text-gray-400'}">
+                                ${isSub ? '<i class="fas fa-check-circle mr-1"></i>입력 완료' : '<i class="fas fa-hourglass-start mr-1"></i>입력 중...'}
+                            </span>
+                        </div>
+                        ${isSub ? `
+                            <button onclick="resetGroupSubmission('${i}')" class="w-full mt-2 bg-red-100 hover:bg-red-200 text-red-700 font-bold py-2 rounded-lg text-sm transition">
+                                <i class="fas fa-undo mr-1"></i>입력 취소 (환불)
+                            </button>
+                        ` : ''}
+                    </div>
+                `;
+            }
+
+            appContainer.innerHTML = `
+                <div class="max-w-5xl mx-auto mt-4 space-y-6">
+                    <!-- 교사 대시보드 상단 바 -->
+                    <div class="card p-6 flex flex-col md:flex-row justify-between items-center bg-gray-900 text-white shadow-xl">
+                        <div class="text-center md:text-left mb-4 md:mb-0">
+                            <div class="text-indigo-400 font-bold text-lg">게임 진행 상황</div>
+                            <h2 class="text-4xl font-extrabold tracking-tight">
+                                제 ${round} 라운드 
+                                <span class="text-yellow-400 ml-2">
+                                    ${state === 'waiting_round_start' ? '[시작 대기]' : state === 'inputting' ? '[입력 진행 중]' : '[결과 발표]'}
+                                </span>
+                            </h2>
+                        </div>
+                        <div class="flex space-x-3">
+                            <button id="btn-manage-money" class="bg-gray-700 hover:bg-gray-600 text-white px-5 py-3 rounded-xl font-bold text-lg shadow">
+                                <i class="fas fa-coins text-yellow-400 mr-2"></i>모둠 돈 관리
+                            </button>
+                            <button id="btn-reset-game" class="bg-red-600 hover:bg-red-700 text-white px-5 py-3 rounded-xl font-bold text-lg shadow">
+                                <i class="fas fa-redo mr-2"></i>게임 완전 초기화
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- 메인 진행 영역 -->
+                    ${state === 'waiting_round_start' ? `
+                        <div class="card p-12 text-center bg-amber-50 border-2 border-amber-200 shadow-md">
+                            <div class="text-6xl text-amber-500 mb-4"><i class="fas fa-play-circle"></i></div>
+                            <h3 class="text-3xl font-extrabold text-gray-900 mb-3">제 ${round} 라운드 준비 완료</h3>
+                            <p class="text-xl text-gray-700 mb-8">학생들이 준비되면 아래 버튼을 눌러 제출 입력을 개시해 주세요.</p>
+                            <button id="btn-start-round" class="bg-amber-500 hover:bg-amber-600 text-white font-extrabold py-6 px-16 rounded-2xl text-3xl shadow-xl transition transform hover:scale-105">
+                                ${round}라운드 시작하기
+                            </button>
+                        </div>
+                    ` : state === 'inputting' ? `
+                        <div class="card p-8 border border-gray-200">
+                            <h3 class="text-2xl font-extrabold mb-6 border-b pb-3 text-gray-800">모둠별 제출 현황</h3>
+                            <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 mb-10">
+                                ${groupStatusHTML}
+                            </div>
+                            
+                            <div class="text-center">
+                                <button id="btn-check-result" class="bg-blue-600 hover:bg-blue-700 text-white font-extrabold py-6 px-16 rounded-2xl text-3xl shadow-xl transition transform hover:scale-105">
+                                    결과 확인하기
+                                </button>
+                                ${!allSubmitted ? '<p class="text-lg text-amber-600 font-bold mt-4"><i class="fas fa-exclamation-triangle mr-1"></i>아직 제출하지 않은 모둠이 있습니다. 그래도 결과를 확인하시겠습니까?</p>' : ''}
+                            </div>
+                        </div>
+                    ` : `
+                        <div class="card p-8 bg-blue-50 border-2 border-blue-200">
+                            <h3 class="text-3xl font-extrabold mb-6 text-center text-indigo-950">제 ${round} 라운드 결과</h3>
+                            
+                            <div class="max-w-3xl mx-auto space-y-4 mb-10">
+                                ${generateResultListHTML(appState.results)}
+                            </div>
+                            
+                            <div class="text-center">
+                                ${round < TOTAL_ROUNDS ? `
+                                    <button id="btn-prepare-next-round" class="bg-indigo-600 hover:bg-indigo-700 text-white font-extrabold py-6 px-16 rounded-2xl text-3xl shadow-xl transition transform hover:scale-105">
+                                        다음 라운드 준비 (${round + 1}R)
+                                    </button>
+                                ` : `
+                                    <div class="text-3xl font-extrabold text-red-600">🎉 모든 게임이 완료되었습니다! (총 10라운드)</div>
+                                `}
+                            </div>
+                        </div>
+                    `}
+                </div>
+
+                <!-- 모둠 잔액 관리 모달 -->
+                <div id="money-modal" class="${isMoneyModalOpen ? '' : 'hidden-safely'} fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 p-4">
+                    <div class="bg-white rounded-2xl max-w-2xl w-full p-8 shadow-2xl relative max-h-[90vh] overflow-y-auto">
+                        <button id="btn-close-modal" class="absolute top-5 right-5 text-gray-400 hover:text-gray-800 text-3xl"><i class="fas fa-times"></i></button>
+                        <h3 class="text-3xl font-bold mb-2 border-b pb-3"><i class="fas fa-coins text-yellow-500 mr-2"></i>모둠별 잔액 추가 / 차감</h3>
+                        <p class="text-gray-600 mb-6 font-medium">잔액은 기본적으로 가려져 있습니다. 필요 시 눈 모양 아이콘을 눌러 확인하세요.</p>
+                        <div id="money-manage-list" class="space-y-4"></div>
+                    </div>
+                </div>
+            `;
+
+            if (document.getElementById('btn-start-round')) {
+                document.getElementById('btn-start-round').onclick = async () => {
+                    await updateDoc(gameDocRef, { state: 'inputting' });
+                };
+            }
+            if (document.getElementById('btn-check-result')) {
+                document.getElementById('btn-check-result').onclick = revealResults;
+            }
+            if (document.getElementById('btn-prepare-next-round')) {
+                document.getElementById('btn-prepare-next-round').onclick = prepareNextRound;
+            }
+            
+            // 쉬는 시간 초기화 버튼
+            document.getElementById('btn-reset-game').onclick = () => {
+                if(confirm("모든 게임 데이터를 처음으로 초기화하시겠습니까? (쉬는시간 재설정용)")) {
+                    setDoc(gameDocRef, { state: 'setup' });
+                }
+            };
+
+            document.getElementById('btn-manage-money').onclick = openMoneyModal;
+            document.getElementById('btn-close-modal').onclick = closeMoneyModal;
+
+            if (isMoneyModalOpen) {
+                renderMoneyModalContent();
+            }
+        }
+
+        // 특정 모둠 제출 취소 (환불 처리)
+        window.resetGroupSubmission = async (groupId) => {
+            if (!confirm(`${groupId}모둠의 제출을 취소하고 제출했던 금액을 환불하시겠습니까?`)) return;
+            
+            try {
+                const groupData = appState.groups[groupId];
+                const refundAmount = groupData.currentBid || 0;
+                const newBalance = (groupData.balance || 0) + refundAmount;
+
+                await updateDoc(gameDocRef, {
+                    [`groups.${groupId}.status`]: 'pending',
+                    [`groups.${groupId}.currentBid`]: null,
+                    [`groups.${groupId}.balance`]: newBalance
+                });
+            } catch(e) {
+                console.error(e);
+                alert("제출 취소 처리 중 오류가 발생했습니다.");
+            }
+        };
+
+        /* -------------------------------------------------------------------------- */
+        /* 3. 학생용 화면 (소수점 입력 완벽 차단)                                      */
+        /* -------------------------------------------------------------------------- */
+        function renderStudentScreen() {
+            if (!appState || appState.state === 'setup') {
+                appContainer.innerHTML = `
+                    <div class="card p-12 text-center mt-12 max-w-lg mx-auto shadow-xl">
+                        <div class="text-6xl mb-4 text-indigo-500"><i class="fas fa-chalkboard-teacher"></i></div>
+                        <h2 class="text-3xl font-extrabold mb-3">게임 대기 중</h2>
+                        <p class="text-xl text-gray-600">선생님이 아직 게임을 시작하지 않았습니다.<br>잠시만 기다려 주세요.</p>
+                    </div>
+                `;
+                return;
+            }
+
+            const { state, round, groups } = appState;
+            const myData = groups[myGroup];
+
+            if (!myData) {
+                myRole = null;
+                render();
+                return;
+            }
+
+            if (state === 'waiting_round_start') {
+                renderStudentRoundWaitScreen(round, myData.balance);
+            } else if (state === 'inputting') {
+                if (myData.status === 'submitted') {
+                    renderStudentSubmittedWaitScreen();
+                } else {
+                    renderStudentInputScreen(myData.balance, round);
+                }
+            } else if (state === 'result') {
+                renderStudentResultScreen(round, appState.results, myData.balance);
+            }
+        }
+
+        function renderStudentRoundWaitScreen(round, balance) {
+            appContainer.innerHTML = `
+                <div class="max-w-xl mx-auto mt-6">
+                    <div class="card p-6 bg-gradient-to-r from-gray-800 to-indigo-900 text-white rounded-2xl flex justify-between items-center shadow-lg mb-6">
+                        <div>
+                            <span class="bg-indigo-600 text-indigo-100 text-sm font-bold px-3 py-1 rounded-full">${myGroup}모둠</span>
+                            <h2 class="text-3xl font-extrabold mt-1">제 ${round} 라운드</h2>
+                        </div>
+                        <div class="text-right">
+                            <span class="text-gray-300 text-sm font-bold">남은 잔액</span>
+                            <div class="text-3xl font-black text-yellow-400">${balance.toLocaleString()}만원</div>
+                        </div>
+                    </div>
+
+                    <div class="card p-12 text-center shadow-xl">
+                        <div class="text-6xl text-amber-500 mb-6"><i class="fas fa-hourglass-start fa-spin"></i></div>
+                        <h3 class="text-3xl font-extrabold text-gray-900 mb-3">라운드 시작 대기 중</h3>
+                        <p class="text-xl text-gray-600">선생님이 <strong class="text-indigo-600 font-bold">${round}라운드를 시작</strong>할 때까지<br>잠시 대기해 주세요.</p>
+                    </div>
+                </div>
+            `;
+        }
+
+        // 입력 화면 (소수점, 음수, e 입력 완전 차단)
+        function renderStudentInputScreen(balance, round) {
+            appContainer.innerHTML = `
+                <div class="max-w-xl mx-auto mt-4">
+                    <div class="card p-6 bg-gradient-to-br from-indigo-700 to-blue-900 text-white rounded-t-2xl text-center shadow-lg relative">
+                        <div class="flex justify-between items-center mb-2">
+                            <span class="bg-indigo-900 text-indigo-200 text-sm font-bold px-3 py-1 rounded-full">${myGroup}모둠</span>
+                            <span class="text-indigo-200 text-base font-bold">제 ${round} 라운드</span>
+                        </div>
+                        <p class="text-indigo-100 text-lg">현재 남은 잔액</p>
+                        <div class="text-6xl font-black mt-1 tracking-tight">${balance.toLocaleString()}<span class="text-3xl ml-1 font-semibold">만원</span></div>
+                    </div>
+                    
+                    <div class="card p-8 bg-white shadow-2xl rounded-b-2xl rounded-t-none border-t-0">
+                        <label class="block text-gray-800 font-extrabold mb-4 text-2xl text-center">제출 희망 금액 입력</label>
+                        
+                        <div class="flex items-center justify-center mb-6">
+                            <input type="number" id="input-bid" value="0" min="0" max="${balance}" step="1"
+                                onkeydown="if(['e','E','+','-','.'].includes(event.key)) event.preventDefault();"
+                                oninput="this.value = this.value.replace(/[^0-9]/g, '');"
+                                class="w-full text-center text-5xl font-black p-4 border-4 border-indigo-200 rounded-2xl focus:outline-none focus:border-indigo-600 transition shadow-inner bg-indigo-50/30">
+                            <span class="text-3xl font-extrabold text-gray-700 ml-3">만원</span>
+                        </div>
+
+                        <!-- 퀵 조작 버튼 (+1, +10, +100) -->
+                        <div class="grid grid-cols-4 gap-3 mb-8">
+                            <button onclick="addBid(1)" class="bg-gray-100 active:bg-gray-300 text-gray-900 font-extrabold py-4 rounded-xl text-xl border">+1만</button>
+                            <button onclick="addBid(10)" class="bg-gray-100 active:bg-gray-300 text-gray-900 font-extrabold py-4 rounded-xl text-xl border">+10만</button>
+                            <button onclick="addBid(100)" class="bg-gray-100 active:bg-gray-300 text-gray-900 font-extrabold py-4 rounded-xl text-xl border">+100만</button>
+                            <button onclick="clearBid()" class="bg-red-50 active:bg-red-200 text-red-600 font-extrabold py-4 rounded-xl text-xl border border-red-200">초기화</button>
+                        </div>
+                        
+                        <button id="btn-submit-bid" class="w-full bg-indigo-600 hover:bg-indigo-700 active:bg-indigo-800 text-white font-extrabold py-6 rounded-2xl text-3xl shadow-xl transition transform active:scale-95 flex justify-center items-center">
+                            돈 제출하기 <i class="fas fa-paper-plane ml-3"></i>
+                        </button>
+                        <p id="error-msg" class="text-red-600 text-center font-bold text-lg mt-4 hidden-safely"></p>
+                    </div>
+                </div>
+            `;
+
+            window.addBid = (amount) => {
+                const input = document.getElementById('input-bid');
+                let val = parseInt(input.value, 10) || 0;
+                val += amount;
+                if (val > balance) val = balance;
+                input.value = val;
+            };
+            window.clearBid = () => {
+                document.getElementById('input-bid').value = 0;
+            };
+
+            document.getElementById('btn-submit-bid').onclick = async () => {
+                const input = document.getElementById('input-bid');
+                const err = document.getElementById('error-msg');
+                const bid = parseInt(input.value, 10);
+
+                if (isNaN(bid) || bid < 0) {
+                    err.textContent = "올바른 금액을 입력해 주세요.";
+                    err.classList.remove('hidden-safely');
+                    return;
+                }
+                if (bid > balance) {
+                    err.textContent = `남은 잔액(${balance}만원) 이하로 입력해 주세요.`;
+                    err.classList.remove('hidden-safely');
+                    return;
+                }
+                
+                try {
+                    const groupPath = `groups.${myGroup}`;
+                    await updateDoc(gameDocRef, {
+                        [`${groupPath}.currentBid`]: bid,
+                        [`${groupPath}.status`]: 'submitted',
+                        [`${groupPath}.balance`]: balance - bid
+                    });
+                } catch(e) {
+                    alert("제출 중 오류가 발생했습니다. 다시 시도해 주세요.");
+                    console.error(e);
+                }
+            };
+        }
+
+        function renderStudentSubmittedWaitScreen() {
+            appContainer.innerHTML = `
+                <div class="max-w-md mx-auto mt-16">
+                    <div class="card p-10 text-center shadow-xl">
+                        <div class="text-6xl text-green-500 mb-6"><i class="fas fa-check-circle"></i></div>
+                        <h2 class="text-3xl font-extrabold mb-3">제출 완료!</h2>
+                        <p class="text-xl text-gray-600">선생님이 결과를 확인할 때까지<br>잠시 대기해 주세요.</p>
+                        <div class="mt-8 pt-6 border-t border-gray-200">
+                            <p class="text-sm text-gray-400 font-bold">다른 모둠 제출 현황은 교사용 화면에서 확인할 수 있습니다.</p>
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        function renderStudentResultScreen(round, results, balance) {
+            appContainer.innerHTML = `
+                <div class="max-w-xl mx-auto mt-4 space-y-4">
+                    <div class="card p-6 bg-gray-900 text-white rounded-2xl shadow-lg flex justify-between items-center">
+                        <div>
+                            <span class="text-indigo-300 text-sm font-bold">내 정보</span>
+                            <div class="text-2xl font-black">${myGroup}모둠</div>
+                        </div>
+                        <div class="text-right">
+                            <span class="text-gray-400 text-sm font-bold">남은 잔액</span>
+                            <div class="text-3xl font-black text-yellow-400">${balance.toLocaleString()}만원</div>
+                        </div>
+                    </div>
+
+                    <div class="card p-6 bg-blue-50/60 border border-blue-200">
+                        <h3 class="text-2xl font-extrabold mb-4 text-center text-indigo-950 border-b-2 border-blue-200 pb-3">제 ${round} 라운드 결과 발표</h3>
+                        <div class="space-y-3">
+                            ${generateResultListHTML(results, myGroup)}
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        /* -------------------------------------------------------------------------- */
+        /* 4. 계산 및 결과 생성 헬퍼                                                   */
+        /* -------------------------------------------------------------------------- */
+        async function revealResults() {
+            const groupsData = appState.groups;
+            let bids = [];
+            let unsubmitted = [];
+            
+            for(let id in groupsData) {
+                if(groupsData[id].status === 'submitted' && groupsData[id].currentBid !== null) {
+                    bids.push({
+                        id: id,
+                        bid: groupsData[id].currentBid
+                    });
+                } else {
+                    unsubmitted.push({
+                        id: id,
+                        bid: '-'
+                    });
+                }
+            }
+
+            if (bids.length === 0) {
+                alert("아직 제출한 모둠이 하나도 없습니다!");
+                return; 
+            }
+
+            bids.sort((a, b) => b.bid - a.bid);
+
+            const maxBid = bids[0].bid;
+            const minBid = bids[bids.length - 1].bid;
+            
+            let medValues = [];
+            const n = bids.length;
+            
+            if (n % 2 !== 0) {
+                medValues.push(bids[Math.floor(n / 2)].bid);
+            } else {
+                medValues.push(bids[n / 2 - 1].bid);
+                medValues.push(bids[n / 2].bid);
+            }
+
+            bids.forEach((item, index) => {
+                if (item.bid === maxBid) {
+                    item.badgeType = 'highest';
+                    item.badgeText = '최고 금액 (+3칸)';
+                } else if (item.bid === minBid) {
+                    item.badgeType = 'lowest';
+                    item.badgeText = '최저 금액 (+1칸)';
+                } else if (medValues.includes(item.bid)) {
+                    item.badgeType = 'median';
+                    item.badgeText = '중앙값 (+2칸)';
+                } else {
+                    item.badgeType = 'default';
+                    item.badgeText = '-';
+                }
+                item.rank = index + 1;
+            });
+
+            unsubmitted.forEach(item => {
+                item.badgeType = 'default';
+                item.badgeText = '미제출';
+                item.rank = '-';
+                bids.push(item);
+            });
+
+            await updateDoc(gameDocRef, {
+                state: 'result',
+                results: bids
+            });
+        }
+
+        async function prepareNextRound() {
+            const nextRound = appState.round + 1;
+            const groups = appState.groups;
+            
+            const updates = {
+                state: 'waiting_round_start',
+                round: nextRound,
+                results: []
+            };
+            
+            for(let id in groups) {
+                updates[`groups.${id}.status`] = 'pending';
+                updates[`groups.${id}.currentBid`] = null;
+            }
+
+            await updateDoc(gameDocRef, updates);
+        }
+
+        function generateResultListHTML(results, highlightGroupId = null) {
+            let html = '';
+            results.forEach(item => {
+                let badgeClass = 'badge-default';
+                let icon = '';
+                if (item.badgeType === 'highest') { badgeClass = 'badge-highest shadow-md font-extrabold'; icon = '<i class="fas fa-arrow-up mr-1 text-yellow-300"></i>'; }
+                if (item.badgeType === 'median')  { badgeClass = 'badge-median shadow-md font-extrabold scale-105 border-2 border-yellow-300'; icon = '<i class="fas fa-star mr-1 text-yellow-300"></i>'; }
+                if (item.badgeType === 'lowest')  { badgeClass = 'badge-lowest shadow-md font-extrabold'; icon = '<i class="fas fa-arrow-down mr-1 text-yellow-300"></i>'; }
+
+                const isMe = item.id === highlightGroupId;
+                const rowClass = isMe ? 'ring-4 ring-indigo-500 bg-indigo-100' : 'bg-white';
+                
+                const isUnsubmitted = item.badgeText === '미제출';
+                const bidDisplay = isUnsubmitted ? `<span class="text-gray-400">미입력</span>` : `${item.bid.toLocaleString()}만원`;
+                const opacityClass = isUnsubmitted ? 'opacity-60 bg-gray-50' : rowClass;
+
+                html += `
+                    <div class="flex justify-between items-center p-5 rounded-2xl border border-gray-200 ${opacityClass} transition-all">
+                        <div class="flex items-center">
+                            <div class="w-10 h-10 rounded-full bg-gray-200 text-gray-800 flex items-center justify-center font-black text-xl mr-4">${item.rank}</div>
+                            <span class="text-2xl font-extrabold ${isMe && !isUnsubmitted ? 'text-indigo-800' : 'text-gray-900'}">${item.id}모둠</span>
+                        </div>
+                        <div class="flex flex-col items-end">
+                            <span class="text-3xl font-black ${isUnsubmitted ? 'text-gray-400' : 'text-gray-900'}">${bidDisplay}</span>
+                            <span class="px-4 py-1.5 mt-1 text-base rounded-full ${badgeClass}">
+                                ${icon}${item.badgeText}
+                            </span>
+                        </div>
+                    </div>
+                `;
+            });
+            return html;
+        }
+
+        // 모둠 잔액 관리 모달
+        function openMoneyModal() {
+            isMoneyModalOpen = true;
+            const modalEl = document.getElementById('money-modal');
+            if (modalEl) modalEl.classList.remove('hidden-safely');
+            renderMoneyModalContent();
+        }
+
+        function closeMoneyModal() {
+            isMoneyModalOpen = false;
+            const modalEl = document.getElementById('money-modal');
+            if (modalEl) modalEl.classList.add('hidden-safely');
+        }
+
+        function renderMoneyModalContent() {
+            const listContainer = document.getElementById('money-manage-list');
+            if (!listContainer || !appState || !appState.groups) return;
+            
+            listContainer.innerHTML = '';
+            
+            for(let i=1; i<=appState.numGroups; i++) {
+                const bal = appState.groups[i].balance;
+                const isVisible = !!visibleBalances[i];
+
+                listContainer.innerHTML += `
+                    <div class="flex items-center justify-between p-4 bg-gray-50 border rounded-xl">
+                        <span class="font-extrabold text-2xl">${i}모둠</span>
+                        <div class="flex items-center">
+                            <div class="flex items-center justify-end w-40 mr-4">
+                                <span class="font-extrabold text-gray-800 text-xl ${isVisible ? '' : 'hidden-safely'}">${bal.toLocaleString()}만원</span>
+                                <span class="font-extrabold text-gray-400 text-xl ${isVisible ? 'hidden-safely' : ''}">*** 만원</span>
+                                <button onclick="toggleBalance(${i})" class="ml-3 text-gray-400 hover:text-indigo-600 bg-white p-2 rounded-lg border shadow-sm transition" title="잔액 보기">
+                                    <i class="fas ${isVisible ? 'fa-eye-slash' : 'fa-eye'}"></i>
+                                </button>
+                            </div>
+                            <div class="flex space-x-2">
+                                <button onclick="updateBalance(${i}, 100)" class="bg-indigo-100 hover:bg-indigo-200 text-indigo-800 px-4 py-2 rounded-lg font-bold text-lg">+100</button>
+                                <button onclick="updateBalance(${i}, 10)" class="bg-blue-100 hover:bg-blue-200 text-blue-800 px-4 py-2 rounded-lg font-bold text-lg">+10</button>
+                                <button onclick="updateBalance(${i}, -10)" class="bg-red-100 hover:bg-red-200 text-red-800 px-4 py-2 rounded-lg font-bold text-lg">-10</button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }
+        }
+
+        window.toggleBalance = (groupId) => {
+            visibleBalances[groupId] = !visibleBalances[groupId];
+            renderMoneyModalContent();
+        };
+
+        window.updateBalance = async (groupId, amount) => {
+            try {
+                const currentBal = appState.groups[groupId].balance || 0;
+                const newBal = Math.max(0, currentBal + amount);
+                await updateDoc(gameDocRef, {
+                    [`groups.${groupId}.balance`]: newBal
+                });
+            } catch(e) {
+                console.error(e);
+                alert("금액 수정 중 오류가 발생했습니다.");
+            }
+        };
+
+        // 초기 구동
+        initApp();
+
+    </script>
+</body>
+</html>
